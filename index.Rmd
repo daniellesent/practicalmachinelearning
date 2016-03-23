@@ -1,0 +1,156 @@
+---
+title: "Practical Machine Learning - Coursera (project)"
+author: "Dr. Danielle Sent"
+date: "22 maart 2016"
+output: html_document
+---
+
+Practical Machine Learning - Course Project
+Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which they did the exercise.
+
+
+```{r}
+# clear environment
+rm(list = ls())
+```
+Getting data
+The training and testset, as provided, were downloaded and loaded.
+
+```{r}
+# loading packages
+library(caret)
+
+# load data
+if (!file.exists("pml-training.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+
+testing <- read.csv("pml-testing.csv")
+pml_training <- read.csv("pml-training.csv")
+```
+In order to be able to make an out-of-sample-error estimation, the traininset as provided, is split into a trainingset (training) and validationset (validation).
+
+```{r}
+set.seed(12345)
+# split trainingset into training and validationset.
+
+inTrain <- createDataPartition(y=pml_training$classe, p=0.6, list=F)
+training <- pml_training[inTrain, ]
+validation <- pml_training[-inTrain, ]
+```
+
+Cleaning data
+Variables that contain mostly the value NA (used threshold: 0.90), or have nearly zero variance, are bad choices for predictors. These variables were excluded from the training and the validation set. Off the remaining variables, those that do not have any predictive value such as X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, num_window, were removed from both sets as well.
+
+```{r}
+# remove variables with nearly zero variance, these are no good predictors
+nzv <- nearZeroVar(training)
+training <- training[, -nzv]
+validation <- validation[, -nzv]
+
+# remove variables that are almost always NA
+mostlyNA <- sapply(training, function(x) mean(is.na(x))) > 0.90
+training <- training[, mostlyNA==F]
+validation <- validation[, mostlyNA==F]
+```
+
+
+```{r}
+# remove non-predictors (first 6 columns)
+training <- training[, -(1:6)]
+validation <- validation[, -(1:6)]
+```
+
+Create model
+First, a model was created using the random forest method and 10-fold cross validation on the trainingset.
+
+```{r}
+# create model: method random forst, 10-fold cross validaiton
+model_rf <- train(classe ~ ., data=training, method="rf", trControl=trainControl(method = "cv", number = 10))
+```
+
+As a second model, based upon the boosted tree method, again using 10-fold cross validation, was trained:
+
+```{r}
+model_boosted <- train(classe ~ ., data=training, method="gbm", trControl=trainControl(method = "cv", number = 10))
+```
+
+Model accuracy
+
+For both models, the accuracy was determined by fitting the model to the validation set:
+
+```{r}
+# make predictions on validation set
+predRf <- predict(model_rf, validation)
+predGBM <- predict(model_boosted, validation)
+```
+
+The resulting accuracy's were computed:
+```{r}
+accuracy_rf <- confusionMatrix(predRf, validation$classe)$overall[1]
+accuracy_boosted <- confusionMatrix(predGBM, validation$classe)$overall[1]
+accuracy_rf
+accuracy_boosted
+```
+The accuracy of the random forest model is 99.2%. The predicted accuracy for the out-of-sample error is only 0.8%. The accuracy of the boosted tree model is 96.2%, resulting in an out-of-sample error of 3.8%.
+
+Although the random forest model has a very high accuracy, the performance of the combination of the two models given, ensembling, was computed, again using the random forest method.
+
+```{r}
+# create datafrom with predictions based on RF model, boosted model, and the true value
+predictions <- data.frame(predRf, predGBM, classe=validation$classe)
+# fit another model
+ensembled_fit <- train(classe ~., data=predictions, method="rf")
+#make predictions
+pred_ensembled <- predict(ensembled_fit, validation)
+```
+
+For this ensembled model, the accuracy is equal to 99.2% which is equal to the original random forest model. We therefore those not to use the ensembled model, but choose the simpler one (Occcam's razor).
+```{r}
+accuracy_ensembled <- confusionMatrix(pred_ensembled, validation$classe)$overall[1]
+accuracy_ensembled
+```
+
+Re-training the random forest model
+Before predicting on the test set, it is important to train the model on the full training set (pml_training), rather than using a model trained on the training set that was obtained by splitting the original training set in a trainingset and a validation set. Training the model on the largest possible dataset, is more likely to result in accurate predictions. Before retraining and refitting, the data is cleaned again.
+```{r}
+# remove variables that have near zero variance
+nzv <- nearZeroVar(pml_training)
+pml_training <- pml_training[, -nzv]
+
+# remove variables that are almost always NA
+mostlyNA <- sapply(pml_training, function(x) mean(is.na(x))) > 0.90
+pml_training <- pml_training[, mostlyNA==F]
+
+# remove non-predictors (first 6 columns)
+pml_training <- pml_training[, -(1:6)]
+```
+
+We then train the model again, make predictions and save these in seperate files:
+```{r}
+# train model on all training data
+model_rf_all <- train(classe ~ ., data=pml_training, method="rf", trControl=trainControl(method = "cv", number = 10))
+
+# predict on test set
+predictions <- predict(model_rf_all, newdata=testing)
+
+# convert predictions to character vector
+predictions <- as.character(predictions)
+
+# write predictions to files
+create_pred_output <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# make prediction files
+create_pred_output(predictions)
+```
+
